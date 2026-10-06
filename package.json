@@ -1,12 +1,12 @@
 {
-  "name": "mediamonkey",
+  "name": "finalyst-reels",
   "version": "1.0.0",
-  "description": "reel factory for @mediamonkey.ai",
+  "description": "reel factory for @finalyst.ai",
   "main": "index.js",
   "scripts": {
+    "test": "node factory/explainer/selftest.mjs",
     "make": "node factory/make.mjs",
     "bg": "node factory/record-bg.mjs",
-    "clips": "node factory/clips.mjs",
     "voices": "node factory/tts.mjs",
     "topics": "node factory/topics.mjs"
   },

@@ -15,7 +15,21 @@ const BANNED_TAGS = new Set([
   'fyp', 'fypage', 'viral', 'viralreels', 'explore', 'explorepage', 'trending',
   'foryou', 'foryoupage', 'reels', 'reelsinstagram', 'love', 'instagood',
   'follow', 'followme', 'like4like', 'l4l', 'f4f', 'instadaily',
+  'softwareengineering', 'systemdesign', 'backend', 'backenddeveloper', 'devops',
+  'programming', 'coding', 'webdevelopment', 'computerscience', 'techtok', 'developerlife',
 ]);
+
+export const HANDLE = '@finalyst.ai';
+
+// The canonical handle is immutable: every variant the model may write is rewritten to it.
+export function fixHandle(s) {
+  return String(s)
+    .replace(/@?\bfinalyst[\s._]?ai\b/gi, HANDLE)
+    .replace(/@finalyst\b(?!\.ai)/gi, HANDLE);
+}
+
+// 18 to 40 seconds is the allowed range; each reel aims at its own point inside 22 to 33.
+const REEL = { beats: [3, 5], minSeconds: 19, maxSeconds: 36, targetRange: [22, 33] };
 
 export function slugify(s) {
   return String(s)
@@ -33,8 +47,8 @@ export function slugify(s) {
 const LANG_RULES = {
   en: '',
   hi: '\n\nLANGUAGE: write hook, beats, cta and caption in natural spoken Hindi, ' +
-      'Devanagari script, the way a fast Delhi creator talks. Keep the same unhinged ' +
-      'energy. English technical nouns stay in English inside the Hindi sentence. ' +
+      'Devanagari script, in a sharp, analytical financial-media tone. ' +
+      'Tickers, company names and financial terms stay in English inside the Hindi sentence. ' +
       'Accent words must still appear verbatim in their beat text.',
   mix: '\n\nLANGUAGE: hook, beats, cta and caption in English as specified. ADDITIONALLY ' +
        'return "hook_hi": the same hook line in natural spoken Hindi (Devanagari), ' +
@@ -199,17 +213,6 @@ function headlineOf(b, text, i) {
 }
 
 /** throws with a human-readable reason; the reason is fed back on retry. */
-/*
- * Two lengths, run side by side so the insights can settle it. People watch
- * about 20 seconds of a 130 second reel today; "tight" tests whether a shorter
- * reel gets more of them to the payoff, "deep" keeps the full explanation.
- * Targets are in seconds and converted with the voice's real words per second.
- */
-const LENGTHS = {
-  tight: { beats: [6, 9], words: (wps) => ({ low: Math.round(70 * wps), high: Math.round(95 * wps) }) },
-  deep:  { beats: [9, 14], words: (wps) => ({ low: Math.round(110 * wps), high: Math.round(150 * wps) }) },
-};
-
 export function validate(obj, topic, lang = 'en', opts = {}) {
   const err = (m) => { throw new Error(m); };
   if (!obj || typeof obj !== 'object') err('not a JSON object');
@@ -223,30 +226,26 @@ export function validate(obj, topic, lang = 'en', opts = {}) {
         'or rounded with the scale ("about 16.7 million", "sixteen million"), never as a long run of words.');
   }
   if (wordsOf(hook).length > 12) err(`hook is ${wordsOf(hook).length} words, max 12`);
-  // Every top reel opened on a moment ("A customer taps pay once.", "Your hot
-  // key expires at 02:00:00.000."). When the topics turned into "why X" titles
-  // the hooks followed ("Why negative seven modulo three breaks your code.")
-  // and read like a chapter heading again.
-  // hard on early attempts, a warning on the last, like the keyword: a
-  // title-ish hook still beats a lost slot
+  // Hard on early attempts, a warning on the last, like the keyword: a
+  // title-ish hook still beats a lost slot.
   const soft = (m) => (opts.lenientLength ? (opts.log || (() => {}))(`  warning: ${m}`) : err(m));
   if (/^(why|how|what|when|understanding|learn|here'?s|this is|did you know|ever wonder)\b/i.test(hook)) {
-    soft(`hook "${hook}" reads like a title. Open on the moment itself, present tense: what the viewer sees, ` +
-        'types or gets back. Example shape: "Your modulo just returned two different numbers."');
+    soft(`hook "${hook}" reads like a title. Open on the development itself, present tense. ` +
+        'Example shape: "Oil just crossed $100. Here is what changed."');
   }
 
   if (!Array.isArray(obj.beats)) err('beats is not an array');
-  const [bLo, bHi] = (LENGTHS[opts.length] || LENGTHS.deep).beats;
+  const [bLo, bHi] = REEL.beats;
   if (obj.beats.length < bLo || obj.beats.length > bHi) {
     err(`beats has ${obj.beats.length} entries, need ${bLo} to ${bHi}`);
   }
 
   const beats = obj.beats.map((b, i) => {
-    const text = cleanSpoken(typeof b === 'string' ? b : b.text || '');
+    const text = fixHandle(cleanSpoken(typeof b === 'string' ? b : b.text || ''));
     if (!text) err(`beat ${i + 1} has no text`);
     const n = wordsOf(text).length;
-    if (n < 18) err(`beat ${i + 1} is only ${n} words, need 28 to 42`);
-    if (n > 50) err(`beat ${i + 1} is ${n} words, need 28 to 42`);
+    if (n < 8) err(`beat ${i + 1} is only ${n} words, need 12 to 28`);
+    if (n > 34) err(`beat ${i + 1} is ${n} words, need 12 to 28`);
 
     const source = cleanSpoken((b && b.source) || '');
     if (!source) err(`beat ${i + 1} has no source; every claim needs a checkable anchor`);
@@ -287,37 +286,27 @@ export function validate(obj, topic, lang = 'en', opts = {}) {
     b.headline = headlineOf({}, b.text, i);
   });
 
-  let cta = cleanSpoken(obj.cta || '');
-  if (!cta || wordsOf(cta).length > 10) {
+  // the spoken CTA must carry the handle, otherwise it is replaced
+  let cta = fixHandle(cleanSpoken(obj.cta || ''));
+  if (!cta || wordsOf(cta).length > 12 || !cta.includes(HANDLE)) {
     cta = CONFIG.ctaFallbacks[Math.floor(Math.random() * CONFIG.ctaFallbacks.length)];
   }
 
-  const caption = cleanCaption(obj.caption || '') || hook;
+  let caption = fixHandle(cleanCaption(obj.caption || '')) || hook;
+  if (!caption.includes(HANDLE)) caption += `\n\nFollow ${HANDLE} for daily market intelligence.`;
+  if (!/not (investment|financial) advice/i.test(caption)) caption += '\n\nNot investment advice.';
 
+  // Only what the model derived from the story; engineering tags are banned and
+  // nothing is padded in. Instagram counts only the first five.
   let hashtags = (Array.isArray(obj.hashtags) ? obj.hashtags : [])
     .map((t) => String(t).toLowerCase().replace(/[^a-z0-9]/g, ''))
     .filter((t) => t.length > 2 && !BANNED_TAGS.has(t));
-  hashtags = [...new Set(hashtags)];
-  // A reach/niche mix: the broad tags put the reel in front of the feed, the
-  // specific ones land it with people who actually build the thing. Broad tags
-  // are appended (not prepended) so the model's topic-specific ones come first.
-  const BROAD = [
-    'softwareengineering', 'systemdesign', 'backenddeveloper', 'devops',
-    'programming', 'coding', 'webdevelopment', 'computerscience',
-    'techtok', 'developerlife',
-  ];
-  for (const fill of BROAD) {
-    if (hashtags.length >= 5) break;
-    if (!hashtags.includes(fill)) hashtags.push(fill);
-  }
-  // Instagram counts only the first five since December 2025; the rest are
-  // silently ignored and only make the caption look like spam
-  hashtags = hashtags.slice(0, 5);
+  hashtags = [...new Set(hashtags)].slice(0, 5);
+  if (!hashtags.length) hashtags = ['finance', 'markets'];
 
-  // Length budget. The format is 30 to 45 seconds and Kokoro reads roughly 2.5
-  // words a second including the gaps between segments, so the word count is
-  // the only lever that actually controls runtime. Enforced here rather than
-  // trusted to the prompt, because the model reliably overshoots.
+  // Length budget. Kokoro reads roughly `wordsPerSecond` words a second, so the
+  // word count is the only lever that controls runtime. Enforced here rather
+  // than trusted to the prompt, because the model reliably overshoots.
   const hookHi = cleanSpoken(obj.hook_hi || obj.hookHi || '');
   if (lang === 'mix' && !hookHi) err('lang=mix needs a hook_hi field with the Hindi hook line');
   // On the last attempt the word budget stops being fatal. A 150 second reel
@@ -336,8 +325,7 @@ export function validate(obj, topic, lang = 'en', opts = {}) {
   // Words per second comes from the voice config, so changing the voice or its
   // speed keeps runtime on target without touching this file.
   const WPS = Number(CONFIG.wordsPerSecond) || 3.1;
-  const mode = LENGTHS[opts.length] ? opts.length : 'deep';
-  const { low: LOW, high: HIGH } = LENGTHS[mode].words(WPS);
+  const LOW = Math.round(REEL.minSeconds * WPS), HIGH = Math.round(REEL.maxSeconds * WPS);
   const HARD_LOW = Math.round(LOW * 0.85), HARD_HIGH = Math.round(HIGH * 1.15); // still shipped
   const secs = (n) => (n / WPS).toFixed(0);
   // Telling the model "use 350 to 470 words" after it wrote 490 is weak
@@ -351,13 +339,13 @@ export function validate(obj, topic, lang = 'en', opts = {}) {
     const cut = spokenWords - Math.round((LOW + HIGH) / 2);
     err(`script is ${spokenWords} spoken words, about ${secs(spokenWords)}s, which is ${spokenWords - HIGH} over the limit. ` +
         `Remove about ${cut} words to land near ${Math.round((LOW + HIGH) / 2)}. Shorten the wordiest beats; ` +
-        'do not drop the analogy beat and do not reduce the number of beats.');
+        'keep every sourced figure; cut filler first.');
   }
   if (spokenWords < LOW) {
     const add = Math.round((LOW + HIGH) / 2) - spokenWords;
     err(`script is only ${spokenWords} spoken words, about ${secs(spokenWords)}s, which is ${LOW - spokenWords} under the minimum. ` +
-        `Add about ${add} words to land near ${Math.round((LOW + HIGH) / 2)}, as ${Math.max(1, Math.round(add / 35))} more beat(s) ` +
-        'of one component each rather than padding the beats you have.');
+        `Add about ${add} words to land near ${Math.round((LOW + HIGH) / 2)}, as one more beat of ` +
+        'sourced analysis (impact or what to watch) rather than padding the beats you have.');
   }
 
   // The keyword is how the reel is found: spoken (transcribed and indexed), on
@@ -375,10 +363,10 @@ export function validate(obj, topic, lang = 'en', opts = {}) {
   if (!keyword || kwLen > 5) kwProblems.push('"keyword" must be the 2 to 4 word search phrase for this reel');
   else {
     if (!spokenEarly.includes(keyword)) kwProblems.push(`say the keyword "${keyword}" word for word in the hook or the first two beats`);
-    if (!opening.includes(keyword)) kwProblems.push(`use the keyword "${keyword}" word for word somewhere in the opening fragments of the caption, inside the situation`);
+    if (!opening.includes(keyword)) kwProblems.push(`use the keyword "${keyword}" word for word somewhere in the opening lines of the caption`);
   }
   if (/^(why|how|what is|understanding|managing|learn|in this|today)\b/i.test(firstLine.trim())) {
-    soft(`caption opens "${firstLine.slice(0, 40)}...", which is a title. Open with the situation: a symptom, a number, a log line or a flat contradiction.`);
+    soft(`caption opens "${firstLine.slice(0, 40)}...", which is a title. Open with the development itself: the number, the move or the decision.`);
   }
   if (kwProblems.length) {
     if (!opts.lenientLength) err(kwProblems.join('; '));
@@ -419,12 +407,12 @@ const issueText = (issues) => issues.map((x) => `beat ${x.beat}: "${x.claim}" is
  */
 export async function repairBeats(parsed, issues, { model, log = () => {} } = {}) {
   const prompt =
-    'Here is the JSON script of a short explainer reel. A fact checker found these problems ' +
+    'Here is the JSON script of a short financial-media reel. A fact checker found these problems ' +
     '(beat 0 means the hook):\n' +
     issues.map((x) => `- beat ${x.beat}: "${x.claim}". What is true: ${x.fix}`).join('\n') +
     '\n\nRewrite ONLY those beats so every statement is true. Use the correction where it is solid; where ' +
-    'a detail cannot be stated with certainty, say what happens in plain general terms instead of naming ' +
-    'a number, a mode or a UI detail. Keep each rewritten beat within three words of its original length, ' +
+    'a detail cannot be supported, remove the claim and say what happens in plain general terms instead of naming ' +
+    'a price, a percentage, a date or a cause. Keep each rewritten beat within three words of its original length, ' +
     'keep its headline, accent and source fields consistent with the new text. Then make the hook, the ' +
     'caption and every other beat agree with the corrected facts: the same number must never appear two ' +
     'different ways. Change nothing else. Return the full JSON object.\n\n' +
@@ -438,20 +426,21 @@ export async function repairBeats(parsed, issues, { model, log = () => {} } = {}
   }
 }
 
-export async function factCheck(script, { log = () => {} } = {}) {
+export async function factCheck(script, { log = () => {}, brief = null } = {}) {
   // the hook is item 0: it is the title card and the cover, so a wrong number
-  // there is the most visible one (a cover once said sixty-seven million
-  // after the beats had been corrected to 16,777,216)
+  // there is the most visible one
   const lines = [`0. ${script.hook}  [the hook]`, ...script.beats.map((b, i) => `${i + 1}. ${b.text}  [source: ${b.source}]`)].join('\n');
   const prompt =
-    'You are a careful technical fact checker. Use web search. Below are the spoken beats of a short ' +
-    'explainer video, each with the source it claims. Flag only (a) claims a reliable source shows are ' +
-    'FALSE (wrong algorithm or mode, wrong protocol, wrong number) and (b) specific numbers or product ' +
-    'details stated as fact that no source supports. If you are not sure something is wrong, do not ' +
+    'You are a careful financial fact checker. Use web search. Below are the spoken beats of a short ' +
+    'financial news video, each with the source it claims. Flag only (a) claims a reliable source shows are ' +
+    'FALSE or out of date and (b) specific prices, percentages, dates, economic releases, company figures, ' +
+    'earnings, market moves, policy decisions or quotes stated as fact that no source supports, and ' +
+    '(c) causal claims ("X fell because of Y") that no source states. Also flag any statement that tells ' +
+    'viewers to buy or sell a security, or promises a return. If you are not sure something is wrong, do not ' +
     'flag it; a checker that flips its verdict between runs is worse than a lenient one. Ignore ' +
-    'simplifications and analogies that are fair for a general audience. Do not flag style. Flag a ' +
-    'source only if no such document exists at all; a loose or descriptive title for a real document ' +
-    '(for example "RFC 1700 network byte order") is fine. Mark each issue with kind "claim" or "source".\n\n' +
+    'simplifications that are fair for a general audience. Do not flag style. Flag a ' +
+    'source only if no such publication exists at all. Mark each issue with kind "claim" or "source".\n\n' +
+    (brief ? `Facts gathered by the research desk:\n${brief.facts.map((f) => `- ${f.claim} (${f.source})`).join('\n')}\n\n` : '') +
     `${lines}\n\n` +
     // Line format, not JSON: grounded replies come back as prose-wrapped text,
     // and a JSON parse error once let an AES-GCM claim through unchecked.
@@ -497,28 +486,41 @@ export async function writeScript(topic, opts = {}) {
   const lang = opts.lang || CONFIG.lang || 'en';
   const log = opts.log || (() => {});
   const wps = Number(CONFIG.wordsPerSecond) || 3.1;
-  const mode = LENGTHS[opts.length] ? opts.length : 'deep';
-  const lim = LENGTHS[mode].words(wps);
-  const [bLo, bHi] = LENGTHS[mode].beats;
-  const ser = opts.series;
-  const seriesBlock = ser
-    ? `SERIES: this is part ${ser.number} of "${ser.seriesTitle}". ${ser.seriesPitch}\n` +
-      `Concept: ${ser.concept}. Angle to build on: ${ser.angle}.\n` +
-      (ser.previous ? `The previous part covered: ${ser.previous}. You may nod to it in one clause, never rely on it.\n` : '') +
-      `Structure the beats as: the textbook version everyone learned, in plain words; the everyday ` +
-      `analogy; then what the real machine or real system actually does, step by step; the number that ` +
-      `proves it; and what an engineer does differently once they know. Explain it from the ground up ` +
-      `so a smart beginner follows every step, without ever talking down to an expert.\n` +
-      `In the caption, right before the hashtags, add exactly this line: ` +
-      `"${ser.seriesTitle}, part ${ser.number}. Follow for part ${ser.number + 1}."\n\n`
+  // every reel aims at its own duration, so the account does not run to one length
+  const [tLo, tHi] = REEL.targetRange;
+  const targetSeconds = Math.round(tLo + Math.random() * (tHi - tLo));
+  const targetWords = Math.round(targetSeconds * wps);
+  const [bLo, bHi] = REEL.beats;
+  const brief = opts.brief || null;
+  const briefBlock = brief
+    ? 'RESEARCH BRIEF (the only facts you may state; every number, date and quote must come from here):\n' +
+      brief.facts.map((f) => `- ${f.claim} [${f.source}]`).join('\n') + '\n' +
+      (brief.publishedAt ? `Newest development: ${brief.publishedAt}\n` : '') +
+      (brief.angle ? `Explanation angle: ${brief.angle}\n` : '') + '\n'
     : '';
   const base =
-    seriesBlock +
-    `LENGTH FOR THIS REEL (overrides the format contract): ${bLo} to ${bHi} beats, ` +
-    `${lim.low} to ${lim.high} spoken words in total.\n\n` +
-    `Topic for this reel: "${topic}"\n\n` +
-    'Write the reel now. Obey the format contract exactly. ' +
-    'Return only the JSON object.' +
+    `Current date: ${new Date().toISOString().slice(0, 10)}.\n` +
+    `Story for this reel: "${topic}"\n\n` + briefBlock +
+    `FORMAT CONTRACT. Return one JSON object:\n` +
+    `{ "hook": "max 12 words, opens on the development itself, no clickbait",\n` +
+    `  "beats": [ { "text": "12 to 28 spoken words", "headline": "max 5 words, a claim, ends with a full stop",\n` +
+    `               "accent": ["1 or 2 words that appear verbatim in text, a figure or name"],\n` +
+    `               "source": "publisher name backing this beat" } ],\n` +
+    `  "cta": "max 12 words, spoken, must contain ${HANDLE} exactly",\n` +
+    `  "keyword": "2 to 4 word search phrase for this story",\n` +
+    `  "caption": "3 to 5 short lines, plain text, no hashtags. The keyword appears in the first paragraph. ` +
+    `Mention ${HANDLE} once. Last line: Not investment advice.",\n` +
+    `  "hashtags": ["at most 5, lowercase, no #, specific to this story, no generic tags"],\n` +
+    `  "slug": "3 to 6 lowercase words" }\n\n` +
+    `STRUCTURE: ${bLo} to ${bHi} beats that follow: what happened; why it matters; the market or business ` +
+    `impact; what to watch next. Not every story needs every part. Every beat adds a new fact or a new ` +
+    `consequence and none repeats another. Where the brief does not support a cause or a forecast, say ` +
+    `what markets are watching instead of asserting it. No buy or sell calls, no guaranteed outcomes, no ` +
+    `personal advice.\n\n` +
+    `LENGTH: aim for about ${targetSeconds} seconds, which is about ${targetWords} spoken words in total ` +
+    `across the hook, beats and cta. Never fewer than ${Math.round(REEL.minSeconds * wps)} or more than ` +
+    `${Math.round(REEL.maxSeconds * wps)}.\n\n` +
+    'Write the reel now. Return only the JSON object.' +
     (LANG_RULES[lang] || '');
 
   // Two attempts was too few. The length constraint is the one the model is
@@ -547,12 +549,11 @@ export async function writeScript(topic, opts = {}) {
       });
       const parsed = JSON.parse(stripFence(raw));
       // the final attempt ships whatever it gets, within tolerance
-      const script = validate(parsed, topic, lang, { lenientLength: attempt === ATTEMPTS, log, length: mode });
-      // A test reel said WhatsApp encrypts media with AES-GCM (it is CBC plus
-      // HMAC). The format checks cannot catch that, so a grounded second read
-      // does. If the check itself cannot run, the script ships.
+      const script = validate(parsed, topic, lang, { lenientLength: attempt === ATTEMPTS, log });
+      // The format checks cannot catch a wrong price or an invented cause, so a
+      // grounded second read does. If the check itself cannot run, the script ships.
       let final = script;
-      const issues = await factCheck(script, { log });
+      const issues = await factCheck(script, { log, brief });
       if (issues) {
         // repair in place, then ship it without a second check: the checker
         // has contradicted itself between runs, and the repair uses its own
@@ -560,13 +561,13 @@ export async function writeScript(topic, opts = {}) {
         const fixed = await repairBeats(parsed, issues, { model, log });
         if (!fixed) throw new Error(`fact check: ${issueText(issues)}. Rewrite those beats with the true facts.`);
         try {
-          final = validate(fixed, topic, lang, { lenientLength: true, log, length: mode });
+          final = validate(fixed, topic, lang, { lenientLength: true, log });
         } catch (e) {
           throw new Error(`fact check: ${issueText(issues)}. Rewrite those beats with the true facts.`);
         }
         log(`  fact check: repaired beats ${issues.map((x) => x.beat).join(', ')}`);
       }
-      final.lengthMode = mode;
+      final.targetSeconds = targetSeconds;
       log(`  script ok on attempt ${attempt}: ${final.beats.length} beats, slug ${final.slug}`);
       return final;
     } catch (e) {

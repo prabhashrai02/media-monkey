@@ -27,7 +27,7 @@ if (!TOKEN) {
   console.error('IG_ACCESS_TOKEN missing');
   process.exit(1);
 }
-const G = 'https://graph.instagram.com/v21.0';
+const G = `https://graph.instagram.com/${process.env.IG_API_VERSION || 'v21.0'}`;
 
 async function gget(path, params = {}) {
   const q = new URLSearchParams({ ...params, access_token: TOKEN });

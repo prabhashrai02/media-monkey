@@ -1,17 +1,13 @@
-// Self-feeding topic supply.
+// Story discovery for FINALYST reels.
 //
-// Three sources, merged and de-duplicated against everything already rendered:
-//   1. LIVE   Gemini with the google_search tool, asked for what is actually
-//             moving today inside the lane. This is the recreation of the old
-//             python pipeline's grounded-trends step.
-//   2. HN     Hacker News via the Algolia API, front-page stories filtered to
-//             brain/AI/internet keywords. Also the fallback when google_search
-//             is not enabled for the key.
-//   3. LOCAL  factory/topics.json backlog, the evergreen floor so the factory
-//             never blocks on a network.
+// No categories, no keyword lists, no rotation, no backlog. Gemini searches the
+// live web (google_search grounding) with no subject in mind and returns the
+// stories that are genuinely worth explaining right now. This file only
+// applies the selection rules to that answer: recency, evidence, novelty,
+// then the strongest composite score wins.
 //
-// Everything rendered gets appended to out/history.json, and nothing in there
-// is ever offered again.
+// Everything rendered is appended to the history file (restored from the
+// reels branch on CI) and a story that matches one already there is dropped.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,14 +17,13 @@ import { gemini } from './llm.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
 const CONFIG = JSON.parse(fs.readFileSync(path.join(HERE, 'config.json'), 'utf8'));
-const TOPICS_FILE = path.join(HERE, 'topics.json');
-// out/ is gitignored, so on CI this file used to start empty on every run and
-// every repetition guard below silently did nothing (20 of 20 runs logged
-// "recent: none"). CI now restores it from the reels branch before rendering
-// and writes it back after publishing; MEDIAMONKEY_HISTORY points at it.
+// out/ is gitignored; CI restores the channel's memory from the reels branch
+// before rendering and MEDIAMONKEY_HISTORY points at that copy.
 const HISTORY_FILE = process.env.MEDIAMONKEY_HISTORY || path.join(ROOT, 'out', 'history.json');
 
-const KEYWORDS = /\b(brain|neuro|neuron|cogniti|memory|percept|vision|conscious|psycholog|sleep|dopamine|attention|ai|llm|model|neural|transformer|agent|algorithm|feed|social|internet|scroll|addict|interface|latency)\b/i;
+const FRESH_HOURS = 6;
+const MAX_HOURS = 24;
+const REPEAT_OVERLAP = 0.6;
 
 export function normalizeTopic(t) {
   return String(t).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -46,31 +41,32 @@ export function appendHistory(entry) {
   return hist.length;
 }
 
-function historyKeys() {
-  const keys = new Set();
-  for (const h of readHistory()) {
-    if (h.topic) keys.add(normalizeTopic(h.topic));
-    if (h.slug) keys.add(String(h.slug).toLowerCase());
+/** The story lines the account has already published, newest first. */
+export function recentStories(n = 40) {
+  return readHistory().slice(-n).reverse().map((h) => h.topic || h.hook).filter(Boolean);
+}
+
+const STOP = new Set('the a an and or of to in on at for with from as by is are was were be it its this that than then after before over into amid says said new about will could would may more less up down'.split(' '));
+const contentWords = (s) => new Set(normalizeTopic(s).split(' ').filter((w) => w.length > 2 && !STOP.has(w)));
+
+/**
+ * Same story under a different headline: the smaller headline's content words
+ * mostly appear in the other. Compared on words, not on any keyword list.
+ */
+export function isRepeat(topic, history = readHistory()) {
+  const a = contentWords(topic);
+  if (!a.size) return false;
+  for (const h of history.slice(-80)) {
+    for (const prior of [h.topic, h.hook]) {
+      if (!prior) continue;
+      const b = contentWords(prior);
+      if (!b.size) continue;
+      if (normalizeTopic(prior) === normalizeTopic(topic)) return true;
+      const shared = [...a].filter((w) => b.has(w)).length;
+      if (Math.min(a.size, b.size) >= 3 && shared / Math.min(a.size, b.size) >= REPEAT_OVERLAP) return true;
+    }
   }
-  return keys;
-}
-
-export function localBacklog() {
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  return (j.backlog || []).map((t) => ({ topic: t, source: 'backlog' }));
-}
-
-/** Hacker News front page, filtered to the lane. Keyless, no rate limit pain. */
-export async function hnSignals(limit = 12) {
-  const url = 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=60';
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error(`hn ${res.status}`);
-  const data = await res.json();
-  return (data.hits || [])
-    .map((h) => h.title)
-    .filter((t) => t && KEYWORDS.test(t))
-    .slice(0, limit)
-    .map((t) => ({ topic: t, source: 'hn' }));
+  return false;
 }
 
 /** First balanced [...] in a string, ignoring brackets inside JSON strings. */
@@ -96,18 +92,14 @@ function balancedArray(s) {
 }
 
 /**
- * Grounded generation cannot use responseMimeType=application/json, so this
- * answer arrives as prose-wrapped JSON written by a model having a good day or
- * a bad one. A greedy /\[[\s\S]*\]/ turns one stray bracket or one unescaped
- * quote into zero topics, which is how a whole batch ended up on the HN
- * fallback. Degrade instead: balanced array, then greedy, then object by
- * object, then just the topic strings.
+ * Grounded generation cannot use responseMimeType=application/json, so the
+ * answer arrives as prose-wrapped JSON. A successful JSON.parse is not the
+ * test ("sources [1] and [2]" parses as an array of numbers): carrying a
+ * topic is. Degrades from the whole array to object by object.
  * @returns {{list: Array, how: string}}
  */
 export function parseTopicList(raw) {
   const text = String(raw).replace(/```(?:json)?/g, '');
-  // "Based on sources [1] and [2]" parses as a perfectly valid array of
-  // numbers, so a successful JSON.parse is not the test: carrying topics is.
   const usable = (v) => (Array.isArray(v)
     ? v.filter((o) => o && typeof o === 'object' && typeof o.topic === 'string' && o.topic.trim())
     : []);
@@ -121,315 +113,149 @@ export function parseTopicList(raw) {
       if (list.length) return { list, how };
     } catch { /* try the next strategy */ }
   }
-  // one malformed entry should not cost us the other seven
   const objs = [];
-  for (const m of text.matchAll(/\{[^{}]*\}/g)) {
+  for (const m of text.matchAll(/\{(?:[^{}]|\{[^{}]*\})*\}/g)) {
     try { objs.push(JSON.parse(m[0])); } catch { /* skip just this one */ }
   }
   const fromObjs = usable(objs);
   if (fromObjs.length) return { list: fromObjs, how: 'per-object' };
-  const bare = [...text.matchAll(/"topic"\s*:\s*"([^"]{5,160})"/g)].map((m) => ({ topic: m[1] }));
-  if (bare.length) return { list: bare, how: 'topic-regex' };
   return { list: [], how: 'none' };
 }
 
-/**
- * Least-recently-used category, so the account cannot collapse into one theme.
- * Live news skews hard toward whatever is trending (AI, lately), so the category
- * is chosen FIRST and the search is pointed at it, rather than letting the
- * headlines pick the subject every time.
- */
-export function pickCategory(opts = {}) {
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  const cats = j.categories || [];
-  if (!cats.length) return null;
-  let hist = [];
-  try {
-    hist = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-  } catch {}
-  const recent = hist
-    .slice(-cats.length)
-    .map((h) => h.category)
-    .filter(Boolean);
-  const unused = cats.filter((c) => !recent.includes(c.key));
-  const from = unused.length ? unused : cats;
-  const pick = from[Math.floor(Math.random() * from.length)];
-  if (opts.log) opts.log(`  category: ${pick.key} (recent: ${recent.join(', ') || 'none'})`);
-  return pick;
+const num = (v, lo = 0, hi = 10) => Math.min(hi, Math.max(lo, Number(v) || 0));
+
+function ageHours(o, now) {
+  const t = Date.parse(o.publishedAt || '');
+  if (Number.isFinite(t)) return Math.max(0, (now - t) / 3600000);
+  const h = Number(o.hoursAgo);
+  return Number.isFinite(h) && o.hoursAgo !== '' && o.hoursAgo != null ? h : null;
 }
 
 /**
- * Grounded trend pull. Returns [] and sets `.reason` on the thrown error if the
- * key cannot use the google_search tool, so the caller can fall back quietly.
+ * Turn one raw candidate into a ranked, evidence-carrying story, or null when
+ * it fails a hard rule (no topic, too old, no sourced fact).
  */
-export async function liveTopics(count = 8, opts = {}) {
-  const log = opts.log || (() => {});
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  const today = new Date().toISOString().slice(0, 10);
-  const cat = opts.category || null;
-  const prompt =
-    `Today is ${today}. Channel lane: ${j.lane}.\n` +
-    (cat
-      ? `THIS BATCH MUST BE ABOUT: ${cat.key} (${cat.hint}). Do not drift into other ` +
-        `subjects, and do not make it about AI unless the category IS ai.\n` +
-        `Search the web for genuinely interesting recent findings or discussions in that subject.\n\n`
-      : `Search the web for what is actually being discussed right now in this lane.\n\n`) +
-    (opts.recent && opts.recent.length
-      ? `ALREADY PUBLISHED on this channel. Do not propose the same mechanism again, and do ` +
-        `not reuse the same opening scenario (a 3am pager, a CPU dashboard that looks wrong, ` +
-        `healthy-looking microservices) even for a different mechanism:\n` +
-        opts.recent.map((r) => `- ${r}`).join('\n') + '\n\n'
-      : '') +
-    `Then propose ${count} short-form video topics with real viral potential for a ` +
-    `two minute explainer reel. Rules:\n` +
-    '- Each topic must rest on a real, checkable mechanism. No speculation, no vibes.\n' +
-    '- DEPTH TEST: a working engineer must finish the reel knowing something they can USE ' +
-    'or explain in a design review: a failure mode, a tradeoff, a number that changes a decision. ' +
-    'Never a definition, never a listicle, never "what is X".\n' +
-    '- HOOK TEST: it must still stop a scroll. The best hooks here are a counterintuitive ' +
-    'second-order effect ("adding a replica made writes slower"), a hidden cost, or a thing ' +
-    'everyone does that is quietly wrong.\n' +
-    '- Assume the viewer is a mid-level engineer. Skip anything on the first page of the docs. ' +
-    'No product launch recaps, no news roundups, no beginner explainers.\n' +
-    '- Prefer mechanisms that decompose into 4 components, because the reel draws one per beat.\n' +
-    '- No celebrities, no copyrighted characters, no brands as protagonists.\n' +
-    '- Phrase each as a lowercase topic line, 5 to 12 words, no hashtags, no quotes.\n' +
-    '- Prefer the surprising mechanism over the news headline.\n\n' +
-    'Return ONLY a JSON array of objects: [{"topic":"...","why":"one line on why it lands now"}]';
-
-  const raw = await gemini({
-    prompt,
-    model: opts.model || CONFIG.model,
-    temperature: 0.9,
-    tools: [{ google_search: {} }],
-    timeoutMs: 90000,
-  });
-  const { list: arr, how } = parseTopicList(raw);
-  if (!arr.length) {
-    throw new Error(`grounded search returned no parseable topics (${raw.length} chars of prose)`);
-  }
-  log(`  live topics: ${arr.length} from grounded search (parsed: ${how})`);
-  return arr
-    .map((o) => ({ topic: String(o.topic || '').trim(), why: o.why || '', source: 'live' }))
-    .filter((o) => o.topic);
-}
-
-/**
- * The one function make.mjs calls.
- * @returns {Promise<{topics: Array<{topic,source,why?}>, notes: string[]}>}
- */
-export async function supplyTopics(n = 1, opts = {}) {
-  const log = opts.log || (() => {});
-  const notes = [];
-  const seen = historyKeys();
-  const category = opts.category === null ? null : opts.category || pickCategory({ log });
-  const pool = [];
-  const add = (list) => {
-    for (const item of list) {
-      const key = normalizeTopic(item.topic);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      pool.push(item);
-    }
-  };
-
-  if (opts.useGoogleSearch ?? CONFIG.topics.useGoogleSearch) {
-    try {
-      add(await liveTopics(opts.liveCount || CONFIG.topics.liveCount, { log, category, recent: opts.recent }));
-      notes.push('google_search grounding: ok');
-    } catch (e) {
-      notes.push(`google_search grounding unavailable (${e.message.slice(0, 120)}), fell back to HN`);
-      log(`  live topics failed: ${e.message}`);
-      try {
-        add(await hnSignals());
-        notes.push('hn signals: ok');
-      } catch (e2) {
-        notes.push(`hn signals also failed (${e2.message.slice(0, 80)})`);
-      }
-    }
-  }
-
-  add(localBacklog());
-  if (!pool.length) throw new Error('no unused topics left; add to factory/topics.json');
-
-  // live first, then hn, then backlog shuffled: fresh beats evergreen, but the
-  // backlog order is randomized so the account does not march down a list.
-  const rank = { live: 0, hn: 1, backlog: 2 };
-  const backlog = pool.filter((p) => p.source === 'backlog').sort(() => Math.random() - 0.5);
-  const fresh = pool.filter((p) => p.source !== 'backlog').sort((a, b) => rank[a.source] - rank[b.source]);
-  const ordered = [...fresh, ...backlog];
-
-  const tagged = ordered.slice(0, n).map((t) => ({ ...t, track: 'production', category: t.category || (category && category.key) || null }));
-  return { topics: tagged, notes, category: category && category.key };
-}
-
-/* ------------------------------------------------------------------------ *
- * Tracks. Every run belongs to one of four:
- *   everyday    "Behind the tap": what happens inside things everyone touches
- *   root        "From the root": CS fundamentals in order, textbook vs machine
- *   ai          AI system design, built up from tokens to full designs
- *   production  the original failure-mode reels, by category
- * The track furthest below its target share (topics.json "tracks") goes next,
- * so the mix holds exactly instead of drifting the way random draws do.
- * ------------------------------------------------------------------------ */
-
-export function pickTrack(opts = {}) {
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  const want = j.tracks || { production: 1 };
-  // backfilled entries predate tracks; counting them would make the next
-  // twenty runs all series to "catch up" on a mix that did not exist yet
-  const hist = readHistory().filter((h) => !h.backfill).slice(-40);
-  const n = hist.length || 1;
-  const counts = Object.fromEntries(Object.keys(want).map((k) => [k, 0]));
-  for (const h of hist) counts[h.track || 'production'] = (counts[h.track || 'production'] || 0) + 1;
-  let best = null, bestDeficit = -Infinity;
-  for (const [k, share] of Object.entries(want)) {
-    if (k !== 'production' && !nextEpisode(k)) continue;   // series finished
-    const deficit = share - counts[k] / n;
-    if (deficit > bestDeficit) { best = k; bestDeficit = deficit; }
-  }
-  if (opts.log) opts.log(`  track: ${best} (last ${hist.length}: ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(', ')})`);
-  return best || 'production';
-}
-
-/** The next unpublished episode of a series, in curriculum order. */
-export function nextEpisode(seriesKey) {
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  const series = j.series && j.series[seriesKey];
-  if (!series) return null;
-  const done = new Set(readHistory().map((h) => h.episodeId).filter(Boolean));
-  // concepts the account covered before the series existed: skipped, but they
-  // do not count toward the episode number shown on screen
-  const pre = new Set(readHistory().map((h) => h.coversEpisode).filter(Boolean));
-  // a concept already covered as a production reel counts as done, so the
-  // series never re-runs what the account has already posted
-  const covered = readHistory().map((h) => normalizeTopic(`${h.topic || ''} ${h.hook || ''}`));
-  const idx = series.curriculum.findIndex((ep) => {
-    if (done.has(ep.id) || pre.has(ep.id)) return false;
-    const c = normalizeTopic(ep.concept);
-    return !covered.some((t) => t.includes(c) && c.length > 6);
-  });
-  if (idx < 0) return null;
-  const ep = series.curriculum[idx];
-  const prev = series.curriculum.slice(0, idx).reverse().find((e) => done.has(e.id));
+export function scoreCandidate(o, now = Date.now()) {
+  const topic = String(o.topic || '').trim();
+  const facts = (Array.isArray(o.facts) ? o.facts : [])
+    .map((f) => ({ claim: String(f && f.claim || '').trim(), source: String(f && f.source || '').trim() }))
+    .filter((f) => f.claim && f.source);
+  const age = ageHours(o, now);
+  if (!topic || !facts.length || age == null || age > MAX_HOURS) return null;
+  const fresh = age <= FRESH_HOURS;
+  const score = 3 * num(o.reach) + 3 * num(o.significance) + 2 * num(o.explainability) + 2 * num(o.hook)
+    + (fresh ? 12 : 0) + Math.min(facts.length, 4);
   return {
-    ...ep,
-    // episodes are numbered by what has actually been published, so a skipped
-    // or already-covered concept never leaves a gap in the count
-    number: [...done].filter((id) => id.startsWith(`${seriesKey}-`)).length + 1,
-    seriesKey, seriesTitle: series.title, seriesPitch: series.pitch,
-    previous: prev ? prev.concept : null,
+    topic, why: String(o.why || '').trim(), source: 'live', score,
+    ageHours: +age.toFixed(1), fresh,
+    brief: { publishedAt: o.publishedAt || null, facts, angle: String(o.angle || '').trim() },
   };
 }
 
+function searchPrompt(count, recent) {
+  const now = new Date();
+  return (
+    `Current date and time: ${now.toISOString()} (UTC).\n\n` +
+    `You are the research desk of a premium financial-media account. Do not search for a ` +
+    `predefined category. Determine what financial story is most worth explaining right now.\n\n` +
+    `Search the current financial, business, market, economic and policy news broadly, and let ` +
+    `the news itself decide the subject. It could be anything with real financial consequence. ` +
+    `Look at what happened in the last ${FRESH_HOURS} hours first; only if that is thin, widen to the ` +
+    `last ${MAX_HOURS} hours. Never go beyond ${MAX_HOURS} hours.\n\n` +
+    `Return the ${count} strongest distinct stories, judged on:\n` +
+    `- reach: how many people it matters to\n` +
+    `- significance: real consequence for markets, money, companies, consumers or the economy\n` +
+    `- explainability: there is a clear "why this matters" beyond the headline\n` +
+    `- hook: surprising, counterintuitive or consequential\n` +
+    `- evidence: every fact is stated by a reliable source you actually found\n\n` +
+    (recent.length
+      ? `ALREADY COVERED by this account. Do not return these stories again, or the same story ` +
+        `under another headline:\n${recent.map((r) => `- ${r}`).join('\n')}\n\n`
+      : '') +
+    `Rules: never invent a price, percentage, date, quote, market reaction or cause. A cause is ` +
+    `only stated if a source states it. Facts must be quotable from the sources. No investment ` +
+    `advice, no predictions presented as facts.\n\n` +
+    `Return ONLY a JSON array, no prose:\n` +
+    `[{"topic":"the story in one plain sentence, 8 to 16 words, no hashtags",\n` +
+    `  "publishedAt":"ISO 8601 UTC time of the newest development",\n` +
+    `  "why":"one line on why it matters to a broad audience",\n` +
+    `  "angle":"the explanation that goes beyond the headline",\n` +
+    `  "reach":1-10, "significance":1-10, "explainability":1-10, "hook":1-10,\n` +
+    `  "facts":[{"claim":"a specific, checkable statement with its figure or date","source":"publisher name"}]}]`
+  );
+}
+
 /**
- * Production categories ranked by how their reels actually performed. Scores
- * are median views of the category's published reels, read live from the
- * Instagram API when a token is present. 70% of picks follow the scores,
- * softened so one hit cannot monopolise the account; 30% explore, preferring
- * categories with no data yet. Categories used in the last eight production
- * runs are skipped either way.
+ * Search the live web and return qualifying stories, best first.
+ * @returns {Promise<Array<{topic, why, score, ageHours, fresh, brief, source}>>}
  */
-export async function pickProductionCategory(opts = {}) {
+export async function discoverStories(count = CONFIG.topics.liveCount || 8, opts = {}) {
   const log = opts.log || (() => {});
-  const j = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf8'));
-  const cats = j.categories || [];
-  const hist = readHistory();
-  const recentCats = hist.filter((h) => (h.track || 'production') === 'production').slice(-8).map((h) => h.category);
-  const eligible = cats.filter((c) => !recentCats.includes(c.key));
-  const pool = eligible.length ? eligible : cats;
-
-  const views = await mediaViews(hist.filter((h) => h.igMediaId).slice(-60).map((h) => h.igMediaId), opts);
-  const byCat = {};
-  for (const h of hist) {
-    const v = h.igMediaId && views[h.igMediaId];
-    if (v == null || !h.category) continue;
-    (byCat[h.category] = byCat[h.category] || []).push(v);
-  }
-  const med = (a) => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
-  const scored = pool.map((c) => ({ c, score: byCat[c.key] ? med(byCat[c.key]) : null, n: (byCat[c.key] || []).length }));
-  const known = scored.filter((x) => x.score != null);
-  const explore = Math.random() < 0.3 || !known.length;
-  let pick;
-  if (explore) {
-    const fresh = scored.filter((x) => x.score == null);
-    const from = fresh.length ? fresh : scored;
-    pick = from[Math.floor(Math.random() * from.length)];
-  } else {
-    // square root softens the curve: a 4x better category is picked 2x as often
-    const w = known.map((x) => Math.sqrt(Math.max(1, x.score)));
-    let r = Math.random() * w.reduce((a, b) => a + b, 0);
-    pick = known.find((x, i) => (r -= w[i]) <= 0) || known[0];
-  }
-  log(`  category: ${pick.c.key} (${explore ? 'explore' : `exploit, median ${pick.score} views over ${pick.n}`}; ` +
-      `skipping recent: ${recentCats.filter(Boolean).join(', ') || 'none'})`);
-  return pick.c;
-}
-
-/** Views per media id from the Instagram API, best effort. */
-async function mediaViews(ids, opts = {}) {
-  const token = process.env.IG_ACCESS_TOKEN;
-  const out = {};
-  if (!token || !ids.length) return out;
-  await Promise.all(ids.map(async (id) => {
+  const recent = opts.recent || recentStories(40);
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const r = await fetch(`https://graph.instagram.com/v21.0/${id}/insights?metric=views&access_token=${token}`,
-        { signal: AbortSignal.timeout(15000) });
-      const j = await r.json();
-      const v = j.data && j.data[0] && j.data[0].values && j.data[0].values[0] && j.data[0].values[0].value;
-      if (typeof v === 'number') out[id] = v;
-    } catch { /* missing data just means this reel does not vote */ }
-  }));
-  return out;
-}
-
-/** The hooks the account has actually published, newest first. */
-export function recentHooks(n = 40) {
-  return readHistory().slice(-n).reverse().map((h) => h.hook || h.topic).filter(Boolean);
+      const raw = await gemini({
+        prompt: searchPrompt(count, recent),
+        model: opts.model || CONFIG.model,
+        temperature: 0.4,
+        tools: [{ google_search: {} }],
+        timeoutMs: 120000,
+        maxOutputTokens: 8192,
+      });
+      const { list, how } = parseTopicList(raw);
+      if (!list.length) throw new Error(`no parseable stories (${raw.length} chars of prose)`);
+      const now = Date.now();
+      const history = readHistory();
+      const scored = list.map((o) => scoreCandidate(o, now)).filter(Boolean);
+      const novel = scored.filter((s) => !isRepeat(s.topic, history));
+      log(`  research: ${list.length} candidates (parsed: ${how}), ${scored.length} fresh and sourced, ${novel.length} not covered before`);
+      if (!novel.length) throw new Error('no qualifying story: everything found was stale, unsourced or already covered');
+      return novel.sort((a, b) => b.score - a.score);
+    } catch (e) {
+      lastErr = e;
+      log(`  research attempt ${attempt} failed: ${e.message}`);
+    }
+  }
+  throw new Error(`story discovery failed: ${lastErr.message}`);
 }
 
 /**
- * What make.mjs calls in --auto mode. Returns one topic entry carrying its
- * track, and for series episodes the series context the script needs.
+ * Sourced facts for a topic the operator supplied by hand, so the script
+ * writer is never left to recall numbers from memory.
  */
-/** tight vs deep, alternated by whichever has run less lately: a clean A/B. */
-export function pickLength() {
-  const recent = readHistory().filter((h) => !h.backfill && h.length).slice(-20);
-  const tight = recent.filter((h) => h.length === 'tight').length;
-  return tight * 2 < recent.length ? 'tight' : 'deep';
+export async function briefFor(topic, opts = {}) {
+  const prompt =
+    `Current date and time: ${new Date().toISOString()} (UTC).\n` +
+    `Research this financial story using web search: "${topic}"\n` +
+    `Return ONLY JSON: {"publishedAt":"ISO time of the newest development","angle":"the explanation ` +
+    `beyond the headline","facts":[{"claim":"specific checkable statement with its figure or date",` +
+    `"source":"publisher name"}]}. 4 to 8 facts. Never invent a figure, date, quote or cause.`;
+  const raw = await gemini({
+    prompt, model: opts.model || CONFIG.model, temperature: 0.2,
+    tools: [{ google_search: {} }], timeoutMs: 90000, maxOutputTokens: 4096,
+  });
+  const m = /\{[\s\S]*\}/.exec(raw.replace(/```(?:json)?/g, ''));
+  const j = JSON.parse(m ? m[0] : '{}');
+  const facts = (j.facts || []).filter((f) => f && f.claim && f.source);
+  return facts.length ? { publishedAt: j.publishedAt || null, angle: j.angle || '', facts } : null;
 }
 
+/** make.mjs uses this to top up a batch beyond the topics given on the command line. */
+export async function supplyTopics(n = 1, opts = {}) {
+  const stories = await discoverStories(Math.max(n, CONFIG.topics.liveCount || 8), opts);
+  return { topics: stories.slice(0, n), notes: [`google_search research: ${stories.length} qualifying stories`] };
+}
+
+/** What make.mjs calls in --auto mode: the single strongest story right now. */
 export async function nextTopic(opts = {}) {
   const log = opts.log || (() => {});
-  const track = opts.track || pickTrack({ log });
-  const length = opts.length || pickLength();
-  log(`  length: ${length}`);
-  const withLen = (e) => ({ ...e, length });
-  return withLen(await nextTopicFor(track, opts, log));
-}
-
-// series tracks and the category their reels are filed under in history
-const SERIES_CATEGORY = { root: 'fundamentals', ai: 'ai-systems', everyday: 'everyday' };
-
-async function nextTopicFor(track, opts, log) {
-  if (SERIES_CATEGORY[track]) {
-    const ep = nextEpisode(track);
-    if (!ep) throw new Error(`series "${track}" has no unpublished episodes left; add to factory/topics.json`);
-    log(`  episode: ${ep.seriesTitle} #${ep.number}, ${ep.module}: ${ep.concept}`);
-    return {
-      topic: ep.concept, source: 'series', track, category: SERIES_CATEGORY[track],
-      episodeId: ep.id, series: ep,
-    };
-  }
-  const category = await pickProductionCategory({ log });
-  const { topics, notes } = await supplyTopics(1, { log, category, recent: recentHooks(40) });
-  notes.forEach((nt) => log(`topics: ${nt}`));
-  return { ...topics[0], track: 'production', category: category.key };
+  const [best] = (await supplyTopics(1, opts)).topics;
+  log(`  story: ${best.topic} (${best.ageHours}h old, score ${best.score})${best.why ? `\n  why: ${best.why}` : ''}`);
+  return best;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const n = Number(process.argv[2] || 5);
-  const { topics, notes } = await supplyTopics(n, { log: console.log });
-  for (const note of notes) console.log(`note: ${note}`);
-  for (const t of topics) console.log(`- [${t.source}] ${t.topic}${t.why ? `  (${t.why})` : ''}`);
+  const stories = await discoverStories(Number(process.argv[2] || 8), { log: console.log });
+  for (const s of stories) console.log(`- [${s.score}] ${s.ageHours}h  ${s.topic}${s.why ? `  (${s.why})` : ''}`);
 }

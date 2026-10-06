@@ -162,6 +162,12 @@ export function isHindiVoice(v) {
  * spoken text only; captions and the screen keep the real spelling.
  */
 const SAY = [
+  [/@finalyst\.ai/gi, 'finalyst dot A I'],
+  [/\bRBI\b/g, 'R B I'],
+  [/\bSEBI\b/g, 'sebi'],
+  [/\b(GDP|CPI|IPO|ETF|FOMC|OPEC|FII|FPI|EPS|PMI|PPI)\b/g, (m) => m.split('').join(' ')],
+  [/(\d)\s?bps\b/gi, '$1 basis points'],
+  [/₹\s?([\d,.]+)(\s?(?:crore|lakh|thousand|million|billion|trillion))?/gi, '$1$2 rupees'],
   [/\bnginx\b/gi, 'engine x'],
   [/\bkubectl\b/gi, 'cube control'],
   [/\bk8s\b/gi, 'kubernetes'],

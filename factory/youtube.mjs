@@ -125,7 +125,7 @@ const body = {
     description,
     // total tag length is capped at 500 characters, not by count
     tags: tags.reduce((acc, t) => (acc.join('').length + t.length < 480 ? [...acc, t] : acc), []),
-    categoryId: '28',                       // Science & Technology
+    categoryId: '25',                       // News & Politics
   },
   status: scheduleAt
     ? { privacyStatus: 'private', publishAt: scheduleAt, selfDeclaredMadeForKids: false }

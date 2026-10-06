@@ -1,4 +1,4 @@
-name: 🐵 Daily Reel
+name: FINALYST Daily Reel
 
 on:
   schedule:
@@ -14,10 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "Optional topic (blank = auto)"
-        required: false
-      track:
-        description: "Optional track: everyday | root | ai | production (blank = auto mix)"
+        description: "Optional story to cover (blank = research the strongest story right now)"
         required: false
       theme:
         description: "Optional look for this run: diorama | paper (blank = config explainer.theme)"
@@ -89,16 +86,16 @@ jobs:
       - name: Render reel
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}   # read-only here: ranks categories by real views
           MEDIAMONKEY_FFPROBE: /usr/bin/ffprobe
+          INPUT_TOPIC: ${{ github.event.inputs.topic }}
+          INPUT_THEME: ${{ github.event.inputs.theme }}
         run: |
-          ARGS=""
-          if [ -n "${{ github.event.inputs.track }}" ]; then ARGS="--track ${{ github.event.inputs.track }}"; fi
-          if [ -n "${{ github.event.inputs.theme }}" ]; then ARGS="$ARGS --theme ${{ github.event.inputs.theme }}"; fi
-          if [ -n "${{ github.event.inputs.topic }}" ]; then
-            node factory/make.mjs "${{ github.event.inputs.topic }}" $ARGS
+          ARGS=()
+          if [ -n "$INPUT_THEME" ]; then ARGS+=(--theme "$INPUT_THEME"); fi
+          if [ -n "$INPUT_TOPIC" ]; then
+            node factory/make.mjs "$INPUT_TOPIC" "${ARGS[@]}"
           else
-            node factory/make.mjs --auto $ARGS
+            node factory/make.mjs --auto "${ARGS[@]}"
           fi
           REEL=$(find out -name reel.mp4 -newer package.json | head -1)
           echo "REEL=$REEL" >> "$GITHUB_ENV"
@@ -160,6 +157,7 @@ jobs:
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_API_VERSION: ${{ vars.IG_API_VERSION }}
         run: |
           # the cover is the moment the kinetic hook is complete, not frame 0
           COVER=$(node -e "const j=require('./$(dirname "$REEL")/youtube.json');process.stdout.write(String(j.coverMs||1200))")
@@ -185,6 +183,7 @@ jobs:
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_API_VERSION: ${{ vars.IG_API_VERSION }}
         run: |
           SLUG="${{ needs.render.outputs.slug }}"
           curl -sfL -o "$RUNNER_TEMP/caption.txt" "https://raw.githubusercontent.com/${{ github.repository }}/reels/staging/$SLUG.txt"

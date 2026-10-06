@@ -15,7 +15,7 @@ for attempt in 1 2 3 4 5; do
   git -C "$REPO" fetch -q origin reels
   git -C "$REPO" worktree add -q --detach "$WT" origin/reels
   ( cd "$WT" && mkdir -p state staging && REPO="$REPO" bash -c "$*" )
-  if ( cd "$WT" && git add -A && { git diff --cached --quiet || git -c user.name=media-monkey-bot -c user.email=anzalabidi@gmail.com commit -qm "$MSG"; } && git push -q origin HEAD:reels ); then
+  if ( cd "$WT" && git add -A && { git diff --cached --quiet || git -c user.name=finalyst-reels-bot -c user.email=prabhashsahaj@gmail.com commit -qm "$MSG"; } && git push -q origin HEAD:reels ); then
     git -C "$REPO" worktree remove --force "$WT"; echo "pushed: $MSG"; exit 0
   fi
   git -C "$REPO" worktree remove --force "$WT"

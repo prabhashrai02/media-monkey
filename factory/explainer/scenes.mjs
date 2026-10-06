@@ -687,7 +687,7 @@ async function scenesForBatch(topic, batch, offset, opts, cast = [], bible = nul
   const lines = batch.map((b, i) =>
     `BEAT ${offset + i + 1} (${b.want} scenes)\nheadline: ${b.headline}\nnarration: ${b.text}`).join('\n\n');
   const prompt =
-    `You are storyboarding a technical explainer video about: ${topic}\n\n` +
+    `You are storyboarding a premium financial-media Reel about: ${topic}\n\n` +
     `Each beat below is spoken over the number of scenes marked next to it, and ` +
     `they hard-cut between one another. A scene is on screen for about five ` +
     `seconds, which is why a long beat needs three: the frame has to keep ` +
@@ -698,8 +698,8 @@ async function scenesForBatch(topic, batch, offset, opts, cast = [], bible = nul
     `different, with ONE important exception: when the payoff is the same system ` +
     `changing, repeat the same flow with the same labels and show the change through ` +
     `"state", "becomes" and "traffic". A diagram the viewer already understands, now ` +
-    `breaking, is the strongest pair of scenes there is. Aim for about a third of the ` +
-    `beats to use it. Never two "note" scenes in a ` +
+    `shifting, is the strongest pair of scenes there is. Use it where a chain of cause and ` +
+    `effect really exists. Never two "note" scenes in a ` +
     `row and never two "stat" scenes in a row.\n\n` +
     (world
       ? `HEADLINES: every scene has its own headline, written by you: max 5 words, sentence ` +
@@ -714,46 +714,29 @@ async function scenesForBatch(topic, batch, offset, opts, cast = [], bible = nul
         `chapter title, never the hook line, never the same headline twice in a row.\n\n`
       : `The first scene keeps the beat's own headline verbatim. Every later scene needs ` +
         `a NEW headline you write: max 5 words, sentence case, a spoken fragment usually ` +
-        `ending in a full stop ("The lock never releases.", "Now it costs you."). ` +
+        `ending in a full stop ("Oil just broke $100.", "Now it costs you."). ` +
         `Never a chapter title.\n\n`) +
-    `METAPHORS STAY IN THEIR BEAT: the analogy beat may label things in everyday ` +
-    `words (a bank teller, a queue at a counter), but every other scene is about the ` +
-    `real system and uses real component names only (Kubelet, Postgres, the pod). ` +
-    `Never put a metaphor label into a technical diagram.\n\n` +
-    `CONTINUITY: when the same component appears in consecutive scenes, give it the ` +
-    `EXACT same label both times. It then glides to its new place on screen instead of ` +
-    `being redrawn, and the viewer keeps track of the system. Prefer building on the ` +
-    `previous scene, the same node in a new state, over starting a fresh picture.\n\n` +
-    `Everything on screen must be technically real: real commands, real file names, ` +
-    `real log lines, real numbers from the narration. Never invent a number the ` +
-    `narration does not contain.\n\n${MENU}\n\n${world ? MENU_DIORAMA + '\n\n' : ''}${KIND_LINE}\n\n` +
+    `FINANCIAL HONESTY: every price, percentage, date, name and quote on screen is exactly what ` +
+    `that beat's narration says, in the same form. Never invent a number the narration does not ` +
+    `contain, never plot made-up data points, and never show a buy or sell call.\n\n` +
+    `CONTINUITY: when the same entity appears in consecutive scenes, give it the EXACT same ` +
+    `label both times so it glides to its new place instead of being redrawn.\n\n` +
+    `PICK THE PRIMITIVE THE STORY NEEDS: a price or rate moving is a "chart"; one large figure is a ` +
+    `"stat"; before/after or two sides is a "compare"; a cause-and-effect chain is a "flow"; several ` +
+    `drivers or factors at once is a "list" (or a "stack" only when the values really differ by ` +
+    `orders of magnitude). Do not force a chart into a beat that has no number moving. Avoid "window", ` +
+    `"code", "cells", "tree", "diff" and "sequence": they are software artifacts and almost never ` +
+    `fit a market story.\n\n${MENU}\n\n${world ? MENU_DIORAMA + '\n\n' : ''}${KIND_LINE}\n\n` +
     (world ? worldBrief(bible, batch, offset, prev) : '') +
     (cast.length
       ? `COMPONENTS ALREADY ON SCREEN in earlier scenes of this same video. When you ` +
         `mean one of these, use EXACTLY this label, character for character, so the ` +
         `viewer sees the same box and it can carry over: ${cast.map((c) => `"${c}"`).join(', ')}.\n\n`
       : '') +
-    // everyday episodes follow one object a person touches (the photo, the card,
-    // the OTP) through the machine; bit-level types only where a beat is about bits
-    (opts.series && opts.series.seriesKey === 'everyday'
-      ? `THIS IS A "${opts.series.seriesTitle}" EPISODE. The story is one ordinary thing a person ` +
-        `does, and the viewer follows that one object through the machine. Keep it on screen: ` +
-        `carry the same label for it (the photo, the card, the message) across scenes so it can ` +
-        `travel, and show what happens to it at each step with the real components ("flow", ` +
-        `"sequence", "window"). Use "cells", "stack" or "code" only where a beat is really about ` +
-        `bytes, latencies or code.\n\n`
-      : opts.series
-      ? `THIS IS A "${opts.series.seriesTitle}" EPISODE. Show the actual machinery, not boxes ` +
-        `with labels on them: real bits and bytes and array slots ("cells"), the real tree ` +
-        `("tree"), the real latencies side by side ("stack"), the real message order ` +
-        `("sequence"), the real code ("code"). Use at least three of those five types across ` +
-        `the episode wherever they fit the beat.\n\n`
-      : `Use "sequence" for any race, handshake or retry, "code" for any code, and "stack" ` +
-        `for any comparison of latencies or sizes across orders of magnitude.\n\n`) +
     `THE BEATS:\n${lines}\n\n` +
     `Return ONLY JSON, with exactly the requested number of scenes per beat:\n` +
-    `{ "eyebrow": "the field this reel is about, 1 to 3 words, uppercase, e.g. ` +
-    `POSTGRES, TLS, KUBERNETES, CLOUD STORAGE",\n` +
+    `{ "eyebrow": "the subject of this reel, 1 to 3 words, uppercase, e.g. ` +
+    `CRUDE OIL, RBI POLICY, NVIDIA, US TARIFFS",\n` +
     `  "beats": [ { "beat": <number>, "scenes": [ {"type":"","headline":"","subhead":"","data":{}}, {...} ] } ] }`;
 
   const raw = await llmCall(opts)({
@@ -1320,14 +1303,14 @@ export async function writeScenes(topic, script, opts = {}) {
     // follow for the next one
     eyebrow: opts.series
       ? `${opts.series.seriesTitle} · ${String(opts.series.number).padStart(2, '0')}`.toUpperCase()
-      : eyebrow || clip(clean(opts.category || 'ENGINEERING'), 3).toUpperCase(),
+      : eyebrow || clip(clean(opts.category || 'MARKETS'), 3).toUpperCase(),
     accent: accentFor(opts.category),
-    episode: opts.episode || 'THE PROD MONKEY',
+    episode: opts.episode || 'FINALYST',
     handle: opts.handle || '',
     title: {
       kicker: opts.series
         ? `${opts.series.seriesTitle} · part ${opts.series.number}`.toUpperCase()
-        : eyebrow || clip(clean(opts.category || 'ENGINEERING'), 3).toUpperCase(),
+        : eyebrow || clip(clean(opts.category || 'MARKETS'), 3).toUpperCase(),
       title: clean(script.hook),
       // on-screen text is indexed by Instagram search, so the search phrase is
       // printed on the title card, the frame that is also the grid cover

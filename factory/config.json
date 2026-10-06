@@ -1,8 +1,8 @@
 {
-  "voice": "am_fenrir",
+  "voice": "af_heart",
   "voiceCandidates": [
-    "am_fenrir",
-    "am_michael"
+    "af_heart",
+    "am_fenrir"
   ],
   "speed": 1.1,
   "lang": "en",
@@ -54,14 +54,12 @@
     "sampleRate": 24000
   },
   "topics": {
-    "useGoogleSearch": true,
     "liveCount": 8
   },
   "ctaFallbacks": [
     "Follow @finalyst.ai for the next market move.",
     "Follow @finalyst.ai for daily market intelligence.",
-    "Follow @finalyst.ai for what markets are watching next.",
-    "Follow @finalyst.ai for the next big market move."
+    "Follow @finalyst.ai for what markets are watching next."
   ],
   "explainerSubtitle": {
     "fontSize": 46,

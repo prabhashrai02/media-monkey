@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// The orchestrator. topic -> script -> tts -> assemble -> out/<date>/<slug>/.
+// The orchestrator. story -> script -> tts -> assemble -> out/<date>/<slug>/.
 //
-//   node factory/make.mjs "why your brain cant ignore a loading spinner"
-//   node factory/make.mjs --auto                 # topics.mjs picks
-//   node factory/make.mjs --auto --batch 3       # three different topics
-//   node factory/make.mjs "topic" --lang mix     # Hindi hook, English body
+//   node factory/make.mjs --auto                 # research the strongest story right now
+//   node factory/make.mjs "story to cover"        # a story you name; sourced facts are researched
+//   node factory/make.mjs --auto --batch 3       # three different stories
+//   node factory/make.mjs --auto --dry           # script only, no render
 //
 // Flags: --auto --batch N --lang en|hi|mix --voice <kokoro id> --no-live
 //        --dry (script only, no render)
@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { writeScript, segmentsOf, slugify } from './script.mjs';
 import { synthSegments } from './tts.mjs';
 import { assemble } from './assemble.mjs';
-import { supplyTopics, appendHistory, nextTopic, readHistory } from './topics.mjs';
+import { supplyTopics, appendHistory, nextTopic, readHistory, briefFor } from './topics.mjs';
 import { writeScenes, loadArt } from './explainer/scenes.mjs';
 import { renderExplainer } from './explainer/render.mjs';
 import { probeSummary, firstFrameInk } from './ffmpeg.mjs';
@@ -51,8 +51,6 @@ function parseArgs(argv) {
     else if (v === '--voice') a.voice = argv[++i];
     else if (v === '--no-live') a.live = false;
     else if (v === '--dry') a.dry = true;
-    else if (v === '--track') a.track = argv[++i];        // everyday | root | ai | production
-    else if (v === '--length') a.length = argv[++i];      // tight | deep
     else if (v === '--theme') a.theme = argv[++i] || '';  // diorama | paper ("" = the flat look)
     else if (!v.startsWith('--')) a.topics.push(v);
   }
@@ -89,8 +87,13 @@ async function makeOne(topicEntry, args, index, count) {
   const format = resolveFormat(args.format);
   log(`  format: ${format}, theme: ${args.theme || 'paper'}`);
 
-  const script = await writeScript(topic, { lang: args.lang, log, series: topicEntry.series, length: topicEntry.length || args.length });
-  if (topicEntry.series) script.series = topicEntry.series;
+  // A story named by hand has no research behind it yet; gather sourced facts
+  // so the writer is never left to recall figures from memory.
+  let brief = topicEntry.brief || null;
+  if (!brief && args.live) {
+    try { brief = await briefFor(topic); } catch (e) { log(`  research brief unavailable: ${e.message.slice(0, 100)}`); }
+  }
+  const script = await writeScript(topic, { lang: args.lang, log, brief });
   const segments0 = segmentsOf(script);
   if (args.dry) {
     log(JSON.stringify(script, null, 2));
@@ -119,11 +122,9 @@ async function makeOne(topicEntry, args, index, count) {
     // The scene IS the content here, so it replaces the background entirely and
     // is timed to the narration rather than looped under it.
     const board = await writeScenes(topic, script, {
-      series: topicEntry.series || null,
       // the real narration length of each beat decides how many scenes it gets
       beatDurations: segments.filter((s) => s.kind === 'beat').map((s) => s.duration),
-      category: topicEntry.category || null,
-      episode: 'THE PROD MONKEY',
+      episode: 'FINALYST',
       handle: CONFIG.handle || '',
       theme: args.theme === 'diorama' ? 'diorama' : '',
       // the house art library, minus the pictures the last ten reels already used
@@ -177,8 +178,8 @@ async function makeOne(topicEntry, args, index, count) {
 
   appendHistory({
     slug, topic, hook: script.hook, source: topicEntry.source || 'cli',
-    track: topicEntry.track || 'production', category: topicEntry.category || null,
-    episodeId: topicEntry.episodeId || null, length: script.lengthMode || null,
+    sources: brief ? [...new Set(brief.facts.map((f) => f.source))].slice(0, 6) : [],
+    targetSeconds: script.targetSeconds || null,
     seconds: +Number(probe.format.duration).toFixed(1), lang: args.lang,
     ...(artSlug ? { art: artSlug } : {}),
   });
@@ -196,8 +197,8 @@ async function main() {
 
   let entries;
   if (args.auto) {
-    entries = [];
-    for (let i = 0; i < args.batch; i++) entries.push(await nextTopic({ log, track: args.track }));
+    // one search ranks distinct stories, so a batch never repeats a story
+    entries = args.batch === 1 ? [await nextTopic({ log })] : (await supplyTopics(args.batch, { log })).topics;
   } else {
     // explicit topics first; a larger --batch is topped up from the supply
     entries = args.topics.slice(0, args.batch).map((t) => ({ topic: t, source: 'cli' }));

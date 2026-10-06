@@ -8,8 +8,8 @@
  *                             [--thumb-offset <ms>]
  *
  * Env: IG_USER_ID (the Instagram professional account id),
- *      IG_ACCESS_TOKEN (long-lived page-linked token with
- *      instagram_content_publish permission).
+ *      IG_ACCESS_TOKEN (Instagram Login token with instagram_content_publish),
+ *      IG_API_VERSION (optional, default v23.0).
  * Exits 0 with a notice when secrets are absent, so CI can run without them.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -44,7 +44,8 @@ const caption = captionFile ? readFileSync(captionFile, 'utf8').trim().slice(0, 
 // graph.instagram.com and can self-resolve their user id; classic Facebook-login
 // page tokens talk to graph.facebook.com and need IG_USER_ID.
 const IG_LOGIN = TOKEN.startsWith('IG') || process.env.IG_API === 'instagram';
-const G = IG_LOGIN ? 'https://graph.instagram.com/v21.0' : 'https://graph.facebook.com/v21.0';
+const API_VERSION = process.env.IG_API_VERSION || 'v23.0';
+const G = IG_LOGIN ? `https://graph.instagram.com/${API_VERSION}` : `https://graph.facebook.com/${API_VERSION}`;
 
 async function gpost(path, params) {
   const body = new URLSearchParams({ ...params, access_token: TOKEN });
