@@ -1,8 +1,8 @@
 {
-  "voice": "af_heart",
+  "voice": "am_fenrir",
   "voiceCandidates": [
-    "af_heart",
-    "am_fenrir"
+    "am_fenrir",
+    "am_michael"
   ],
   "speed": 1.1,
   "lang": "en",
@@ -58,10 +58,10 @@
     "liveCount": 8
   },
   "ctaFallbacks": [
-    "follow for the next one",
-    "follow, there is a weirder one coming",
-    "follow if your brain just itched",
-    "one of these a day, follow up"
+    "Follow @finalyst.ai for the next market move.",
+    "Follow @finalyst.ai for daily market intelligence.",
+    "Follow @finalyst.ai for what markets are watching next.",
+    "Follow @finalyst.ai for the next big market move."
   ],
   "explainerSubtitle": {
     "fontSize": 46,
@@ -85,6 +85,6 @@
   "explainer": {
     "theme": "paper"
   },
-  "handle": "",
+  "handle": "@finalyst.ai",
   "wordsPerSecond": 2.62
 }
