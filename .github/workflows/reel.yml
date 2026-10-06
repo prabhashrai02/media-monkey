@@ -30,6 +30,7 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
+    environment: Prod
     # live renders are serialised so two runs never pick the same series
     # episode; dry runs record nothing, so each gets its own group and runs now.
     # The long wait for the slot happens in the publish job, outside this group.
@@ -169,6 +170,7 @@ jobs:
     needs: render
     if: needs.render.outputs.slug != '' && github.event.inputs.dry_run != 'true'
     runs-on: ubuntu-latest
+    environment: Prod
     # no concurrency group: each run's wait is independent, and a shared group
     # would let GitHub cancel one waiting post in favour of the next
     timeout-minutes: 345
